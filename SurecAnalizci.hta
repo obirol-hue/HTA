@@ -295,6 +295,79 @@ function guessActionPurpose(text, url) {
     return "Gezinme / aksiyon";
 }
 
+// ---- Bir giris alaninin en anlamli etiketini bul ----
+function fieldLabel(doc, el) {
+    var parts = [];
+    var ph = el.getAttribute("placeholder"); if (ph) parts.push(trim(ph));
+    var al = el.getAttribute("aria-label"); if (al) parts.push(trim(al));
+    // <label for="id">
+    var id = el.getAttribute("id");
+    if (id) {
+        try {
+            var labs = doc.getElementsByTagName("label");
+            for (var i = 0; i < labs.length; i++) {
+                if (labs[i].getAttribute("for") === id) {
+                    var lt = trim(labs[i].innerText || labs[i].textContent || "");
+                    if (lt) { parts.push(lt); break; }
+                }
+            }
+        } catch (e) {}
+    }
+    var nm = el.getAttribute("name") || el.getAttribute("id");
+    if (nm) parts.push(trim(nm));
+    return parts.length ? parts[0] : "(adsiz)";
+}
+
+// ---- Bir giris alaninin ne topladigini yorumla ----
+function guessFieldPurpose(type, name, label) {
+    type = (type || "").toLowerCase();
+    var t = ((name || "") + " " + (label || "")).toLowerCase();
+    if (type === "password" || /sifre|parola|password|pass/.test(t)) return "Sifre / parola";
+    if (type === "email" || /e-?mail|e-?posta|eposta/.test(t)) return "E-posta adresi";
+    if (type === "tel" || /telefon|phone|gsm|cep|mobile/.test(t)) return "Telefon numarasi";
+    if (type === "search" || /search|\bara\b|arama|query|keyword|\bq\b/.test(t)) return "Arama terimi";
+    if (type === "number" || /miktar|adet|quantity|qty|amount|tutar|fiyat|price|yas|age/.test(t)) return "Sayisal deger";
+    if (type === "date" || type === "datetime-local" || /tarih|date|dogum|birth/.test(t)) return "Tarih";
+    if (type === "file") return "Dosya yukleme";
+    if (type === "checkbox") return "Onay kutusu (evet/hayir secimi)";
+    if (type === "radio") return "Secenek (tekli secim)";
+    if (type === "hidden") return "Gizli alan (sistem verisi)";
+    if (type === "url" || /url|website|web sitesi|link/.test(t)) return "Web adresi";
+    if (type === "color") return "Renk secimi";
+    if (type === "range") return "Kaydirac (deger araligi)";
+    if (/kullanici|username|user_?name|nick|rumuz/.test(t)) return "Kullanici adi";
+    if (/ad|isim|name|fname|firstname/.test(t) && !/kullanici|user/.test(t)) return "Ad / isim";
+    if (/soyad|surname|lastname|lname/.test(t)) return "Soyad";
+    if (/adres|address|sehir|city|posta|zip|ulke|country|il\b|ilce/.test(t)) return "Adres bilgisi";
+    if (/kart|card|cvv|iban|hesap no/.test(t)) return "Odeme / kart bilgisi";
+    if (/mesaj|message|yorum|comment|aciklama|note/.test(t)) return "Mesaj / serbest metin";
+    if (/tc|kimlik|identity|ssn|vergi|tax/.test(t)) return "Kimlik / vergi no";
+    if (type === "select" || type === "select-one") return "Acilir liste secimi";
+    if (type === "textarea") return "Uzun metin girisi";
+    return "Metin girisi";
+}
+
+// ---- Giris alanlarini topla (etiket + amac ile) ----
+function addFields(doc, coll, tag, target, markForm) {
+    for (var i = 0; i < coll.length; i++) {
+        var el = coll[i];
+        var type = (el.getAttribute("type") || (tag === "input" ? "text" : tag)).toLowerCase();
+        if (tag === "input" && /^(submit|button|reset|image)$/.test(type)) continue; // bunlar buton
+        if (markForm) { el.__inForm = true; }
+        else if (el.__inForm) { continue; } // form icinde zaten sayildi
+        if (target.length >= 80) return;
+        var label = fieldLabel(doc, el);
+        target.push({
+            tag: tag,
+            type: type,
+            name: el.getAttribute("name") || el.getAttribute("id") || "(adsiz)",
+            label: label,
+            required: el.getAttribute("required") !== null,
+            purpose: guessFieldPurpose(type, el.getAttribute("name") || el.getAttribute("id"), label)
+        });
+    }
+}
+
 // ---- Sayfanin ne ise yaradigini tahmin et ----
 function guessPagePurpose(page) {
     var hay = ((page.title || "") + " " + (page.url || "") + " " + page.h1List.join(" ")).toLowerCase();
@@ -438,24 +511,21 @@ function analyzePage(url, timeoutSec) {
                     name: f.getAttribute("name") || f.getAttribute("id") || ("Form #" + (fi+1)),
                     fields: []
                 };
-                var ins = f.getElementsByTagName("input");
-                for (var ii = 0; ii < ins.length; ii++) {
-                    form.fields.push({
-                        tag: "input",
-                        type: ins[ii].getAttribute("type") || "text",
-                        name: ins[ii].getAttribute("name") || ins[ii].getAttribute("id") || "(adsiz)",
-                        required: ins[ii].getAttribute("required") !== null
-                    });
-                }
-                var sels = f.getElementsByTagName("select");
-                for (var si = 0; si < sels.length; si++) {
-                    form.fields.push({ tag:"select", type:"select", name: sels[si].getAttribute("name") || "(adsiz)", required:false });
-                }
-                var tas = f.getElementsByTagName("textarea");
-                for (var ti = 0; ti < tas.length; ti++) {
-                    form.fields.push({ tag:"textarea", type:"textarea", name: tas[ti].getAttribute("name") || "(adsiz)", required:false });
-                }
+                addFields(doc, f.getElementsByTagName("input"), "input", form.fields, true);
+                addFields(doc, f.getElementsByTagName("select"), "select", form.fields, true);
+                addFields(doc, f.getElementsByTagName("textarea"), "textarea", form.fields, true);
                 page.forms.push(form);
+            }
+        } catch (e) {}
+
+        // form DISINDAKI giris alanlari (SPA / React vb. icin)
+        try {
+            var orphan = [];
+            addFields(doc, doc.getElementsByTagName("input"), "input", orphan, false);
+            addFields(doc, doc.getElementsByTagName("select"), "select", orphan, false);
+            addFields(doc, doc.getElementsByTagName("textarea"), "textarea", orphan, false);
+            if (orphan.length) {
+                page.forms.push({ method: "JS/AJAX (form etiketi yok)", action: "(istemci tarafi)", name: "Form disi giris alanlari", fields: orphan });
             }
         } catch (e) {}
 
@@ -601,13 +671,15 @@ function buildReport(target, pages, opts) {
                 h.push("<div class='step'>");
                 h.push("<b>Surec " + (fi+1) + ": " + esc(f.name) + "</b><br>");
                 h.push("Yontem: <b>" + esc(f.method) + "</b> &rarr; Hedef: " + esc(f.action) + "<br>");
-                h.push("Alanlar (" + f.fields.length + "): ");
                 if (f.fields.length) {
+                    h.push("<table style='margin-top:6px;'><tr><th>Alan (etiket)</th><th>Tur</th><th>Ne toplar (tahmin)</th><th>Zorunlu</th></tr>");
                     for (var fj = 0; fj < f.fields.length; fj++) {
                         var fld = f.fields[fj];
-                        h.push("<span class='tag'>" + esc(fld.name) + " [" + esc(fld.type) + "]" + (fld.required ? " *" : "") + "</span>");
+                        var disp = (fld.label && fld.label !== "(adsiz)") ? fld.label : fld.name;
+                        h.push("<tr><td>" + esc(disp) + "</td><td>" + esc(fld.type) + "</td><td>" + esc(fld.purpose || "-") + "</td><td>" + (fld.required ? "<span class='err'>Evet</span>" : "Hayir") + "</td></tr>");
                     }
-                } else h.push("<span class='muted'>alan yok</span>");
+                    h.push("</table>");
+                } else h.push("<span class='muted'>Veri girisi alani yok (muhtemelen yalnizca buton iceriyor).</span>");
                 h.push("</div>");
             }
         }
