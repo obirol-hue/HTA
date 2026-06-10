@@ -9,14 +9,34 @@ Bir URL girersiniz, "Analizi Başlat" dersiniz. Araç şunları çıkarır:
 - **Genel bilgiler:** HTTP durum kodu, yanıt süresi, sayfa boyutu, Content-Type, sunucu bilgisi
 - **Teknoloji tespiti:** Server/X-Powered-By başlıkları, WordPress, React, Angular, Vue, jQuery, Bootstrap, ASP.NET, Cloudflare, Google Analytics vb.
 - **Sayfa yapısı:** başlık, dil, meta açıklama, H1–H6 başlık hiyerarşisi
-- **Süreçler (formlar):** her formun yöntemi (GET/POST), hedefi (action) ve tüm alanları (input/select/textarea, zorunlu alanlar `*`) — bunlar sayfadaki etkileşimli süreçler olarak raporlanır
-- **Bağlantılar:** iç/dış bağlantı sayıları ve listeleri
+- **Süreçler (formlar):** her formun yöntemi (GET/POST), hedefi (action) ve tüm alanları — form içindeki **ve form dışındaki** (SPA/React) input/select/textarea. Her alan etiket + tür + ne topladığı (e-posta, şifre, telefon, adres, kart vb.) + zorunluluk bilgisiyle listelenir
+- **Butonlar / tıklanabilir öğeler:** her butonun ne yaptığının yorumu (gönder, giriş, sepet, sil, sonraki adım vb.)
+- **Bağlantılar:** iç/dış bağlantılar, metinleriyle "ne işe yarar" yorumu
 - **Kaynaklar:** script, stil, görsel, iframe sayıları
 - **HTTP yanıt başlıkları:** tam liste
 
-### Süreç Akış Haritası (tarama modu)
+### Anlamlı test verisi ve otomatik senaryolar ("Test verisi" seçeneği)
 
-"İç bağlantıları tara" seçeneğini işaretlerseniz, araç iç linkleri belirlediğiniz sayfa limitine kadar (maks. 30) izleyerek her sayfanın süreçlerini çıkarır ve bir **süreç akış haritası** tablosu oluşturur.
+Varsayılan olarak açıktır. Her giriş alanının **formatına göre anlamlı test verisi** üretir (geçerli e-posta, güçlü şifre, telefon formatı, isim, adres, test kart numarası, tarih vb.) ve her form için **otomatik test senaryoları** çıkarır:
+
+- Geçerli veri (happy path)
+- Zorunlu alan(lar) boş
+- Geçersiz format
+- Sınır değer (uzun/maks.)
+- Güvenlik: XSS denemesi
+- Güvenlik: SQL injection denemesi
+
+Ayrıca "Gönderilecek istek (önizleme)" bölümünde formun **ne göndereceğini** (URL + gövde) gösterir ama **göndermez**.
+
+### Canlı gönderim (opsiyonel — varsayılan KAPALI)
+
+"Formları üretilen test verisiyle GERÇEKTEN gönder" seçeneği açılırsa, araç senaryoları gerçek GET/POST istekleriyle gönderir ve yanıtları değerlendirir (ör. XSS yükünün escape edilmeden yansıyıp yansımadığı, DB hata izi, boş zorunlu alanın yakalanıp yakalanmadığı). Açmadan önce bir onay penceresi çıkar.
+
+> ⚠️ **Canlı gönderim hedef sistemi etkileyebilir** (kayıt oluşturma, mesaj gönderme vb.). Yalnızca test etme **yetkiniz olan** sitelerde kullanın.
+
+### Süreç Akış Haritası ve Sayfalar Arası Veri Tutarlılığı (tarama modu)
+
+"İç bağlantıları tara" seçeneğiyle araç iç linkleri (maks. 30 sayfa) izleyip her sayfanın amacını/süreçlerini çıkarır ve bir **süreç akış haritası** oluşturur. Ayrıca birden fazla sayfada görülen aynı adlı alanları karşılaştırarak **verinin sayfalar arası aynı kalıp kalmadığını** (oturum/CSRF token, önceden dolu değerlerin taşınması) raporlar.
 
 ### Rapor kaydetme
 
@@ -32,8 +52,9 @@ Bir URL girersiniz, "Analizi Başlat" dersiniz. Araç şunları çıkarır:
 
 ## Güvenlik / kapsam notu
 
-- Araç hedef sisteme yalnızca **GET** isteği gönderir ve **pasif DOM analizi** yapar; hiçbir form göndermez, hiçbir veri değiştirmez.
-- Sadece yetkili test, eğitim ve dokümantasyon amaçlı kullanın. Analiz ettiğiniz site için gerekli izinlere sahip olduğunuzdan emin olun.
+- **Varsayılan mod (önizleme):** Araç yalnızca sayfaları çeker (GET), pasif DOM analizi yapar ve test verisi/senaryoları **üretir** — hiçbir form göndermez, hiçbir veri değiştirmez.
+- **Canlı gönderim modu (opsiyonel):** Yalnızca siz açtığınızda ve onayladığınızda formları gerçek GET/POST istekleriyle gönderir. Bu, hedef sistemde değişiklik yaratabilir.
+- Sadece yetkili test, eğitim ve dokümantasyon amaçlı kullanın. Test ettiğiniz site için gerekli izinlere sahip olduğunuzdan emin olun. Üçüncü taraf sitelerde canlı gönderim açmayın.
 
 ## Teknik notlar
 

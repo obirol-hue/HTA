@@ -115,6 +115,15 @@
         <label>Zaman asimi (sn):</label>
         <input type="number" id="timeoutSec" value="20" min="5" max="120" />
     </div>
+    <div class="row">
+        <label>Test verisi:</label>
+        <input type="checkbox" id="genDataChk" checked /> Anlamli test verisi ve senaryolar uret
+    </div>
+    <div class="row">
+        <label>Canli gonderim:</label>
+        <input type="checkbox" id="liveSubmitChk" /> <span class="err">Formlari uretilen test verisiyle GERCEKTEN gonder</span>
+        <span class="muted">(varsayilan: sadece onizleme. Yalnizca yetkili oldugunuz sitelerde acin!)</span>
+    </div>
     <div class="row" style="margin-top:14px;">
         <button id="analyzeBtn" onclick="startAnalysis()">Analizi Baslat</button>
         <button class="secondary" id="saveBtn" onclick="saveReport()" disabled>Raporu Kaydet (HTML)</button>
@@ -130,8 +139,10 @@
 
 // ============================================================
 //  Web Surec Analizci - HTA Test Araci
-//  Sadece analiz/raporlama yapar; hedef sistemde degisiklik
-//  yapmaz (yalnizca GET istekleri ve DOM ayristirma).
+//  Varsayilan: pasif analiz + test verisi/senaryo URETIMI
+//  (onizleme). "Canli gonderim" acilirsa formlar uretilen
+//  test verisiyle gercekten gonderilir - yalnizca yetkili
+//  test ortamlarinda kullanilmalidir.
 // ============================================================
 
 var lastReportHtml = "";
@@ -152,7 +163,7 @@ function esc(t) {
 function nowMs() { return (new Date()).getTime(); }
 
 // ---- HTTP istegi (ServerXMLHTTP, tam header + cross-domain) ----
-function httpGet(url, timeoutSec) {
+function httpSend(method, url, body, contentType, timeoutSec) {
     var result = { ok: false, status: 0, statusText: "", headers: "", body: "", finalUrl: url, timeMs: 0, error: "" };
     var xhr;
     try {
@@ -167,9 +178,10 @@ function httpGet(url, timeoutSec) {
     var start = nowMs();
     try {
         try { xhr.setTimeouts(timeoutSec*1000, timeoutSec*1000, timeoutSec*1000, timeoutSec*1000); } catch (eT) {}
-        xhr.open("GET", url, false);
+        xhr.open(method, url, false);
         try { xhr.setRequestHeader("User-Agent", "SurecAnalizci-HTA/1.0 (Test)"); } catch (eH) {}
-        xhr.send();
+        if (contentType) { try { xhr.setRequestHeader("Content-Type", contentType); } catch (eC) {} }
+        xhr.send(body || "");
         result.timeMs = nowMs() - start;
         result.status = xhr.status;
         result.statusText = xhr.statusText;
@@ -183,6 +195,7 @@ function httpGet(url, timeoutSec) {
     }
     return result;
 }
+function httpGet(url, timeoutSec) { return httpSend("GET", url, null, null, timeoutSec); }
 
 // ---- HTML'i guvenli sekilde ayristir (htmlfile ActiveX) ----
 function parseHtml(html) {
@@ -347,6 +360,154 @@ function guessFieldPurpose(type, name, label) {
     return "Metin girisi";
 }
 
+// ==================================================================
+//  TEST VERISI URETIMI - alanin formatina gore anlamli deger
+//  variant: "valid" | "invalid" | "empty" | "boundary" | "xss" | "sqli"
+// ==================================================================
+var _rnd = (function(){ var c = (new Date()).getTime() % 100000; return function(){ c++; return c; }; })();
+
+function generateTestValue(field, variant) {
+    var type = (field.type || "").toLowerCase();
+    var purpose = field.purpose || "";
+    var name = (field.name || "") + " " + (field.label || "");
+
+    if (variant === "empty") return "";
+    if (variant === "xss")  return "<script>alert(1)<\/script>";
+    if (variant === "sqli") return "' OR '1'='1";
+
+    // ---- gecerli (valid) degerler ----
+    if (variant === "valid" || !variant) {
+        if (purpose === "E-posta adresi" || type === "email") return "test.kullanici" + _rnd() + "@example.com";
+        if (purpose === "Sifre / parola" || type === "password") return "Test1234!" + _rnd();
+        if (purpose === "Telefon numarasi" || type === "tel") return "0555" + (1000000 + (_rnd() % 8999999));
+        if (purpose === "Arama terimi" || type === "search") return "test";
+        if (purpose === "Sayisal deger" || type === "number") return clampNum(field, 42);
+        if (purpose === "Tarih" || type === "date") return "2000-01-15";
+        if (type === "datetime-local") return "2000-01-15T10:30";
+        if (purpose === "Web adresi" || type === "url") return "https://example.com";
+        if (type === "color") return "#3366cc";
+        if (type === "range") return clampNum(field, 50);
+        if (type === "checkbox") return "on";
+        if (type === "radio") return field.value || "1";
+        if (type === "file") return "C:\\test\\ornek.txt";
+        if (purpose === "Kullanici adi") return "testuser" + _rnd();
+        if (purpose === "Ad / isim") return "Ahmet";
+        if (purpose === "Soyad") return "Yilmaz";
+        if (purpose === "Adres bilgisi") return "Test Mah. Deneme Sok. No:1, Istanbul";
+        if (purpose === "Odeme / kart bilgisi") {
+            if (/cvv/.test(name.toLowerCase())) return "123";
+            if (/iban/.test(name.toLowerCase())) return "TR000000000000000000000000";
+            return "4111111111111111"; // standart test kart numarasi
+        }
+        if (purpose === "Kimlik / vergi no") return "10000000146"; // format-gecerli ornek
+        if (purpose === "Mesaj / serbest metin" || type === "textarea") return "Bu bir otomatik test mesajidir.";
+        if (purpose === "Acilir liste secimi" || type === "select" || type === "select-one") return field.firstOption || "";
+        return "test" + _rnd();
+    }
+
+    // ---- gecersiz (invalid) degerler: format ihlali ----
+    if (variant === "invalid") {
+        if (purpose === "E-posta adresi" || type === "email") return "gecersiz-eposta";
+        if (purpose === "Telefon numarasi" || type === "tel") return "abc";
+        if (purpose === "Sayisal deger" || type === "number" || type === "range") return "metin";
+        if (purpose === "Tarih" || type === "date") return "32/13/9999";
+        if (purpose === "Web adresi" || type === "url") return "htp:/yanlis";
+        if (purpose === "Sifre / parola" || type === "password") return "123"; // zayif
+        return "!!!";
+    }
+
+    // ---- sinir (boundary) degerler ----
+    if (variant === "boundary") {
+        if (type === "number" || type === "range") {
+            var max = field.max; return (max !== null && max !== "" && typeof max !== "undefined") ? max : "999999999";
+        }
+        var ml = parseInt(field.maxlength, 10);
+        var len = (!isNaN(ml) && ml > 0) ? ml : 256;
+        return repeatStr("A", len);
+    }
+    return "test";
+}
+function clampNum(field, def) {
+    var mn = parseInt(field.min, 10), mx = parseInt(field.max, 10);
+    if (!isNaN(mn) && def < mn) def = mn;
+    if (!isNaN(mx) && def > mx) def = mx;
+    return String(def);
+}
+function repeatStr(s, n) { var o = ""; for (var i = 0; i < n && i < 5000; i++) o += s; return o; }
+
+// ---- Bir form icin test senaryolari uret ----
+function buildScenarios(form) {
+    var sc = [];
+    var entry = (form.fields.length > 0);
+    if (entry) {
+        sc.push({ name: "Gecerli veri (happy path)", desc: "Tum alanlar formatina uygun gecerli verilerle doldurulur; basarili gonderim beklenir.", variant: "valid" });
+        // zorunlu alanlar
+        var req = [];
+        for (var i = 0; i < form.fields.length; i++) if (form.fields[i].required) req.push(form.fields[i]);
+        if (req.length) {
+            sc.push({ name: "Zorunlu alan(lar) bos", desc: "Zorunlu alanlar bos birakilir (" + reqNames(req) + "); dogrulama hatasi/uyari beklenir.", variant: "empty-required" });
+        }
+        // gecersiz format - format dogrulamasi olan alanlar varsa
+        var fmt = [];
+        for (var j = 0; j < form.fields.length; j++) {
+            var t = (form.fields[j].type || "").toLowerCase(), p = form.fields[j].purpose;
+            if (t==="email"||t==="number"||t==="tel"||t==="date"||t==="url"||t==="range"||p==="E-posta adresi"||p==="Telefon numarasi"||p==="Sayisal deger"||p==="Tarih"||p==="Web adresi") fmt.push(form.fields[j]);
+        }
+        if (fmt.length) sc.push({ name: "Gecersiz format", desc: "Format dogrulamasi olan alanlara hatali deger girilir; reddedilmesi beklenir.", variant: "invalid" });
+        sc.push({ name: "Sinir deger (uzun/maks)", desc: "Maksimum uzunluk veya maks. sayisal degerle test; tasma/kesme davranisi gozlenir.", variant: "boundary" });
+        sc.push({ name: "Guvenlik: XSS denemesi", desc: "Alanlara <script> yuku girilir; ciktida temizlenip temizlenmedigi (yansima) kontrol edilir.", variant: "xss" });
+        sc.push({ name: "Guvenlik: SQL injection denemesi", desc: "Klasik ' OR '1'='1 yuku girilir; hata mesaji/anormal davranis aranir.", variant: "sqli" });
+    } else {
+        sc.push({ name: "Gezinme dogrulamasi", desc: "Bu surec veri girisi icermiyor; baglanti/buton hedefinin dogru sayfaya gittigi kontrol edilir.", variant: "nav" });
+    }
+    return sc;
+}
+function reqNames(arr) { var o = []; for (var i = 0; i < arr.length && i < 5; i++) o.push(arr[i].label || arr[i].name); return o.join(", "); }
+
+// ---- Form icin istek govdesi/URL olustur (gonderim veya onizleme) ----
+function buildFormRequest(form, variant) {
+    var pairs = [];
+    for (var i = 0; i < form.fields.length; i++) {
+        var fld = form.fields[i];
+        if (fld.name === "(adsiz)" || !fld.name) continue;
+        var v;
+        if (variant === "empty-required") v = fld.required ? "" : generateTestValue(fld, "valid");
+        else v = generateTestValue(fld, variant);
+        pairs.push(encodeURIComponent(fld.name) + "=" + encodeURIComponent(v));
+    }
+    var body = pairs.join("&");
+    var method = (form.method || "GET").toUpperCase();
+    var isGet = (method.indexOf("GET") === 0);
+    var action = form.action;
+    if (action === "(istemci tarafi)") action = "";
+    var reqUrl = action;
+    if (isGet && action && body) reqUrl = action + (action.indexOf("?") >= 0 ? "&" : "?") + body;
+    return { method: isGet ? "GET" : (method === "POST" ? "POST" : "POST"), url: reqUrl, body: isGet ? "" : body, isGet: isGet, formBody: body, action: action };
+}
+
+// ---- Yaniti basit degerlendir (senaryo sonucu) ----
+function evalResponse(variant, res) {
+    if (res.error) return { verdict: "warn", note: "Istek hatasi: " + res.error };
+    var b = (res.body || "").toLowerCase();
+    if (variant === "xss") {
+        if (res.body && res.body.indexOf("<script>alert(1)<\/script>") >= 0)
+            return { verdict: "err", note: "DIKKAT: XSS yuku ciktida ESCAPE EDILMEDEN yansidi (olasi zafiyet)." };
+        return { verdict: "ok", note: "XSS yuku ciktida ham olarak yansimadi." };
+    }
+    if (variant === "sqli") {
+        if (/sql syntax|mysql|odbc|ora-\d|sqlite|unclosed quotation|syntax error/.test(b))
+            return { verdict: "err", note: "DIKKAT: Yanitta veritabani hata izi var (olasi SQLi)." };
+        return { verdict: "ok", note: "Belirgin DB hata izi yok." };
+    }
+    if (variant === "empty-required") {
+        if (/zorunlu|gerekli|required|bos birak|doldur|invalid|hata/.test(b))
+            return { verdict: "ok", note: "Sunucu bos zorunlu alani yakaladi (dogrulama calisiyor)." };
+        return { verdict: "warn", note: "Dogrulama mesaji gorunmuyor; sunucu tarafi dogrulama eksik olabilir." };
+    }
+    if (res.status >= 200 && res.status < 400) return { verdict: "ok", note: "Yanit " + res.status + " (" + res.timeMs + " ms)." };
+    return { verdict: "warn", note: "Yanit " + res.status + " " + res.statusText + "." };
+}
+
 // ---- Giris alanlarini topla (etiket + amac ile) ----
 function addFields(doc, coll, tag, target, markForm) {
     for (var i = 0; i < coll.length; i++) {
@@ -357,12 +518,21 @@ function addFields(doc, coll, tag, target, markForm) {
         else if (el.__inForm) { continue; } // form icinde zaten sayildi
         if (target.length >= 80) return;
         var label = fieldLabel(doc, el);
+        var firstOpt = "";
+        if (tag === "select") {
+            try { var opts = el.getElementsByTagName("option"); if (opts.length) firstOpt = opts[0].getAttribute("value") || trim(opts[0].innerText || opts[0].textContent || ""); } catch (e) {}
+        }
         target.push({
             tag: tag,
             type: type,
             name: el.getAttribute("name") || el.getAttribute("id") || "(adsiz)",
             label: label,
             required: el.getAttribute("required") !== null,
+            min: el.getAttribute("min"),
+            max: el.getAttribute("max"),
+            maxlength: el.getAttribute("maxlength"),
+            value: el.getAttribute("value") || "",
+            firstOption: firstOpt,
             purpose: guessFieldPurpose(type, el.getAttribute("name") || el.getAttribute("id"), label)
         });
     }
@@ -399,7 +569,8 @@ function guessPagePurpose(page) {
 }
 
 // ---- Tek bir sayfayi analiz et ----
-function analyzePage(url, timeoutSec) {
+function analyzePage(url, timeoutSec, opts) {
+    opts = opts || {};
     var page = {
         url: url, ok: false, status: 0, statusText: "", error: "",
         timeMs: 0, sizeBytes: 0, contentType: "", server: "",
@@ -540,6 +711,28 @@ function analyzePage(url, timeoutSec) {
         try { page.iframes = doc.getElementsByTagName("iframe").length; } catch (e) {}
     }
     page.purpose = guessPagePurpose(page);
+
+    // ---- test verisi / senaryo / (istege bagli) canli gonderim ----
+    if (opts.genData) {
+        for (var gi = 0; gi < page.forms.length; gi++) {
+            var frm = page.forms[gi];
+            frm.scenarios = buildScenarios(frm);
+            frm.preview = buildFormRequest(frm, "valid"); // ne gonderilecegi (onizleme)
+            frm.submissions = [];
+            if (opts.liveSubmit && frm.fields.length && frm.action && frm.action !== "(istemci tarafi)") {
+                for (var si = 0; si < frm.scenarios.length; si++) {
+                    var sv = frm.scenarios[si];
+                    if (sv.variant === "nav") continue;
+                    var req = buildFormRequest(frm, sv.variant);
+                    if (!req.url) continue;
+                    var res = req.isGet
+                        ? httpSend("GET", req.url, null, null, timeoutSec)
+                        : httpSend("POST", req.url, req.body, "application/x-www-form-urlencoded", timeoutSec);
+                    frm.submissions.push({ scenario: sv.name, variant: sv.variant, method: req.method, url: req.url, eval: evalResponse(sv.variant, res), status: res.status });
+                }
+            }
+        }
+    }
     return page;
 }
 
@@ -553,11 +746,19 @@ function startAnalysis() {
     var timeoutSec = parseInt($("timeoutSec").value, 10) || 20;
     var crawl = $("crawlChk").checked;
     var maxPages = parseInt($("maxPages").value, 10) || 5;
+    var genData = $("genDataChk").checked;
+    var liveSubmit = $("liveSubmitChk").checked;
+
+    if (liveSubmit) {
+        var onay = confirm("DIKKAT: Canli gonderim acik.\n\nFormlar uretilen test verisiyle GERCEKTEN gonderilecek (GET ve POST). Bu, hedef sistemde kayit olusturma, mesaj gonderme gibi etkiler yaratabilir.\n\nYalnizca test etme YETKINIZ olan bir siteyse devam edin.\n\nDevam edilsin mi?");
+        if (!onay) { setStatus("Canli gonderim iptal edildi. Onizleme modunda devam edebilirsiniz.", "warn"); return; }
+    }
 
     $("analyzeBtn").disabled = true;
     $("saveBtn").disabled = true;
     setStatus("Analiz ediliyor: " + esc(url) + " ...", "");
 
+    var opts = { genData: genData, liveSubmit: liveSubmit };
     var pages = [];
     var queue = [url];
     var visited = {};
@@ -568,7 +769,7 @@ function startAnalysis() {
         if (visited[cur]) continue;
         visited[cur] = true;
         setStatus("Analiz ediliyor (" + (pages.length+1) + "/" + limit + "): " + esc(cur), "");
-        var p = analyzePage(cur, timeoutSec);
+        var p = analyzePage(cur, timeoutSec, opts);
         pages.push(p);
         if (crawl && pages.length < limit) {
             for (var i = 0; i < p.internalLinks.length && queue.length < limit*3; i++) {
@@ -578,7 +779,7 @@ function startAnalysis() {
         }
     }
 
-    lastReportHtml = buildReport(url, pages, { crawl: crawl, timeoutSec: timeoutSec });
+    lastReportHtml = buildReport(url, pages, { crawl: crawl, timeoutSec: timeoutSec, genData: genData, liveSubmit: liveSubmit });
     $("report").style.display = "block";
     $("report").innerHTML = lastReportHtml;
     $("analyzeBtn").disabled = false;
@@ -672,14 +873,46 @@ function buildReport(target, pages, opts) {
                 h.push("<b>Surec " + (fi+1) + ": " + esc(f.name) + "</b><br>");
                 h.push("Yontem: <b>" + esc(f.method) + "</b> &rarr; Hedef: " + esc(f.action) + "<br>");
                 if (f.fields.length) {
-                    h.push("<table style='margin-top:6px;'><tr><th>Alan (etiket)</th><th>Tur</th><th>Ne toplar (tahmin)</th><th>Zorunlu</th></tr>");
+                    var showData = !!opts.genData;
+                    h.push("<table style='margin-top:6px;'><tr><th>Alan (etiket)</th><th>Tur</th><th>Ne toplar (tahmin)</th><th>Zorunlu</th>" + (showData ? "<th>Uretilen test verisi</th>" : "") + "</tr>");
                     for (var fj = 0; fj < f.fields.length; fj++) {
                         var fld = f.fields[fj];
                         var disp = (fld.label && fld.label !== "(adsiz)") ? fld.label : fld.name;
-                        h.push("<tr><td>" + esc(disp) + "</td><td>" + esc(fld.type) + "</td><td>" + esc(fld.purpose || "-") + "</td><td>" + (fld.required ? "<span class='err'>Evet</span>" : "Hayir") + "</td></tr>");
+                        h.push("<tr><td>" + esc(disp) + "</td><td>" + esc(fld.type) + "</td><td>" + esc(fld.purpose || "-") + "</td><td>" + (fld.required ? "<span class='err'>Evet</span>" : "Hayir") + "</td>");
+                        if (showData) { var tv = generateTestValue(fld, "valid"); h.push("<td class='muted'>" + (tv === "" ? "(bos)" : esc(tv)) + "</td>"); }
+                        h.push("</tr>");
                     }
                     h.push("</table>");
                 } else h.push("<span class='muted'>Veri girisi alani yok (muhtemelen yalnizca buton iceriyor).</span>");
+
+                // uretilen test senaryolari
+                if (opts.genData && f.scenarios && f.scenarios.length) {
+                    h.push("<div style='margin-top:8px;'><b>Otomatik test senaryolari:</b>");
+                    h.push("<table><tr><th>#</th><th>Senaryo</th><th>Aciklama / beklenti</th></tr>");
+                    for (var sj = 0; sj < f.scenarios.length; sj++) {
+                        h.push("<tr><td>" + (sj+1) + "</td><td><b>" + esc(f.scenarios[sj].name) + "</b></td><td>" + esc(f.scenarios[sj].desc) + "</td></tr>");
+                    }
+                    h.push("</table></div>");
+                }
+
+                // gonderilecek istek onizlemesi
+                if (opts.genData && f.preview && f.preview.action) {
+                    h.push("<div style='margin-top:6px;'><b>Gonderilecek istek (onizleme):</b><br>");
+                    h.push("<span class='tag'>" + esc(f.preview.method) + "</span> <span class='muted'>" + esc(f.preview.isGet ? f.preview.url : f.preview.action) + "</span>");
+                    if (!f.preview.isGet) h.push("<pre>" + esc(f.preview.formBody) + "</pre>");
+                    h.push("</div>");
+                }
+
+                // canli gonderim sonuclari
+                if (f.submissions && f.submissions.length) {
+                    h.push("<div style='margin-top:6px;'><b>Canli gonderim sonuclari:</b>");
+                    h.push("<table><tr><th>Senaryo</th><th>Yontem</th><th>Durum</th><th>Degerlendirme</th></tr>");
+                    for (var ui = 0; ui < f.submissions.length; ui++) {
+                        var sub = f.submissions[ui];
+                        h.push("<tr><td>" + esc(sub.scenario) + "</td><td>" + esc(sub.method) + "</td><td>" + sub.status + "</td><td class='" + sub.eval.verdict + "'>" + esc(sub.eval.note) + "</td></tr>");
+                    }
+                    h.push("</table></div>");
+                }
                 h.push("</div>");
             }
         }
@@ -734,7 +967,54 @@ function buildReport(target, pages, opts) {
         h.push("</table>");
     }
 
-    h.push("<p class='muted' style='margin-top:18px;'>Bu rapor Web Surec Analizci (HTA) ile olusturulmustur. Yalnizca GET istekleri ve pasif DOM analizi yapilmistir; hedef sistemde herhangi bir degisiklik yapilmamistir.</p>");
+    // SAYFALAR ARASI VERI TUTARLILIGI
+    if (pages.length > 1) {
+        // alan/deger haritasi: name -> { pages:{}, values:{} }
+        var fieldMap = {};
+        for (var ci = 0; ci < pages.length; ci++) {
+            for (var cf = 0; cf < pages[ci].forms.length; cf++) {
+                var ff = pages[ci].forms[cf].fields;
+                for (var cj = 0; cj < ff.length; cj++) {
+                    var nm = ff[cj].name;
+                    if (!nm || nm === "(adsiz)") continue;
+                    if (!fieldMap[nm]) fieldMap[nm] = { pages: {}, values: {}, type: ff[cj].type };
+                    fieldMap[nm].pages[ci] = true;
+                    var val = ff[cj].value || "";
+                    if (val) fieldMap[nm].values[val] = true;
+                }
+            }
+        }
+        var shared = [];
+        for (var key in fieldMap) {
+            if (!fieldMap.hasOwnProperty(key)) continue;
+            var pc = 0; for (var pk in fieldMap[key].pages) if (fieldMap[key].pages.hasOwnProperty(pk)) pc++;
+            if (pc > 1) {
+                var vals = []; for (var vk in fieldMap[key].values) if (fieldMap[key].values.hasOwnProperty(vk)) vals.push(vk);
+                shared.push({ name: key, type: fieldMap[key].type, pageCount: pc, vals: vals });
+            }
+        }
+        h.push("<h2>Sayfalar Arasi Veri Tutarliligi</h2>");
+        if (shared.length === 0) {
+            h.push("<span class='muted'>Birden fazla sayfada ortak gorulen ayni adli alan tespit edilmedi.</span>");
+        } else {
+            h.push("<p class='muted'>Ayni adla birden cok sayfada gorulen alanlar. Onceden dolu degeri tum sayfalarda ayni ise veri tasiniyor (oturum/CSRF/onceden dolu) demektir.</p>");
+            h.push("<table><tr><th>Alan adi</th><th>Tur</th><th>Kac sayfada</th><th>Onceden dolu deger(ler)</th><th>Tutarlilik</th></tr>");
+            for (var shi = 0; shi < shared.length; shi++) {
+                var sh = shared[shi];
+                var verdict, vstr;
+                if (sh.vals.length === 0) { verdict = "<span class='muted'>deger yok</span>"; vstr = "-"; }
+                else if (sh.vals.length === 1) { verdict = "<span class='ok'>AYNI (taşiniyor)</span>"; vstr = esc(sh.vals[0].length > 40 ? sh.vals[0].substr(0,40)+"..." : sh.vals[0]); }
+                else { verdict = "<span class='warn'>FARKLI (degisiyor)</span>"; vstr = esc(sh.vals.length + " farkli deger"); }
+                h.push("<tr><td>" + esc(sh.name) + "</td><td>" + esc(sh.type) + "</td><td>" + sh.pageCount + "</td><td class='muted'>" + vstr + "</td><td>" + verdict + "</td></tr>");
+            }
+            h.push("</table>");
+        }
+    }
+
+    var disclaimer = opts.liveSubmit
+        ? "Bu raporda CANLI GONDERIM yapilmistir (test verisiyle GET/POST istekleri gonderildi). Yalnizca yetkili test ortamlarinda kullanin."
+        : "Yalnizca GET istekleri ve pasif DOM analizi yapilmistir; formlar gonderilmedi (onizleme modu).";
+    h.push("<p class='muted' style='margin-top:18px;'>Bu rapor Web Surec Analizci (HTA) ile olusturulmustur. " + disclaimer + "</p>");
     return h.join("");
 }
 
