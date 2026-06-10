@@ -179,7 +179,11 @@ function httpSend(method, url, body, contentType, timeoutSec) {
     try {
         try { xhr.setTimeouts(timeoutSec*1000, timeoutSec*1000, timeoutSec*1000, timeoutSec*1000); } catch (eT) {}
         xhr.open(method, url, false);
-        try { xhr.setRequestHeader("User-Agent", "SurecAnalizci-HTA/1.0 (Test)"); } catch (eH) {}
+        // Tarayici gibi davran: bazi siteler (haber siteleri vb.) tarayici-disi
+        // User-Agent'lari 403 ile engeller. Gercekci basliklarla istek yapilir.
+        try { xhr.setRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"); } catch (eH) {}
+        try { xhr.setRequestHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"); } catch (eA) {}
+        try { xhr.setRequestHeader("Accept-Language", "tr-TR,tr;q=0.9,en;q=0.8"); } catch (eL) {}
         if (contentType) { try { xhr.setRequestHeader("Content-Type", contentType); } catch (eC) {} }
         xhr.send(body || "");
         result.timeMs = nowMs() - start;
