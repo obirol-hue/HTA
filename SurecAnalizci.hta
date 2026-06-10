@@ -251,6 +251,80 @@ function detectTech(headers, body) {
     return tech;
 }
 
+// ---- Buton yardimcilari ----
+function addButton(page, label, type, source) {
+    label = trim(label || "");
+    if (!label) return;
+    if (page.buttons.length >= 60) return;
+    for (var i = 0; i < page.buttons.length; i++) {
+        if (page.buttons[i].label === label && page.buttons[i].type === type) return;
+    }
+    page.buttons.push({ label: label, type: type, source: source, purpose: guessActionPurpose(label, "") });
+}
+function collectButtons(coll, page, url, src) {
+    for (var i = 0; i < coll.length; i++) {
+        var t = trim(coll[i].innerText || coll[i].textContent || coll[i].getAttribute("value") || coll[i].getAttribute("aria-label") || coll[i].getAttribute("title") || "");
+        var bt = (coll[i].getAttribute("type") || "button").toLowerCase();
+        addButton(page, t, bt, src);
+    }
+}
+
+// ---- Bir buton/baglantinin ne yaptigini tahmin et ----
+function guessActionPurpose(text, url) {
+    var t = (text + " " + (url || "")).toLowerCase();
+    if (/giris|login|sign in|oturum a/.test(t)) return "Oturum acma (giris)";
+    if (/cikis|logout|sign out|oturumu kapat/.test(t)) return "Oturumu kapatma";
+    if (/kayit|register|sign up|uye ol|kaydol/.test(t)) return "Yeni kayit / uyelik";
+    if (/ara|search|bul/.test(t)) return "Arama";
+    if (/sepet|cart|basket/.test(t)) return "Sepet islemi";
+    if (/odeme|checkout|payment|satin al|order|siparis/.test(t)) return "Odeme / siparis";
+    if (/ekle|add/.test(t)) return "Ekleme islemi";
+    if (/sil|delete|remove|kaldir/.test(t)) return "Silme islemi";
+    if (/gonder|submit|kaydet|save|onayla|confirm|tamam|apply|uygula/.test(t)) return "Form gonderme / kaydetme";
+    if (/iletisim|contact|bize ulas/.test(t)) return "Iletisim";
+    if (/indir|download/.test(t)) return "Indirme";
+    if (/yukle|upload/.test(t)) return "Yukleme";
+    if (/devam|next|ileri|continue|sonraki/.test(t)) return "Sonraki adima gecis";
+    if (/geri|back|onceki|previous/.test(t)) return "Onceki adima donus";
+    if (/iptal|cancel|vazgec/.test(t)) return "Iptal";
+    if (/menu|hamburger|nav/.test(t)) return "Menu / gezinme";
+    if (/hakkinda|about|kurumsal/.test(t)) return "Bilgi sayfasi";
+    if (/anasayfa|home|ana sayfa/.test(t)) return "Ana sayfaya gidis";
+    if (/profil|account|hesab|profile/.test(t)) return "Hesap / profil";
+    if (/dil|language|lang|en|tr/.test(t)) return "Dil degistirme";
+    return "Gezinme / aksiyon";
+}
+
+// ---- Sayfanin ne ise yaradigini tahmin et ----
+function guessPagePurpose(page) {
+    var hay = ((page.title || "") + " " + (page.url || "") + " " + page.h1List.join(" ")).toLowerCase();
+    var hints = [];
+    // form alanlarina bak
+    var hasPassword = false, hasEmail = false, hasSearch = false, hasFile = false;
+    for (var i = 0; i < page.forms.length; i++) {
+        for (var j = 0; j < page.forms[i].fields.length; j++) {
+            var ty = (page.forms[i].fields[j].type || "").toLowerCase();
+            var nm = (page.forms[i].fields[j].name || "").toLowerCase();
+            if (ty === "password") hasPassword = true;
+            if (ty === "email" || /e-?mail|eposta/.test(nm)) hasEmail = true;
+            if (ty === "search" || /search|ara|query|q$/.test(nm)) hasSearch = true;
+            if (ty === "file") hasFile = true;
+        }
+    }
+    if (hasPassword && /kayit|register|sign ?up|uye/.test(hay)) hints.push("Kayit / uyelik sayfasi");
+    else if (hasPassword) hints.push("Giris (oturum acma) sayfasi");
+    if (hasSearch || /ara|search/.test(hay)) hints.push("Arama sayfasi");
+    if (/sepet|cart|odeme|checkout|siparis|order/.test(hay)) hints.push("Sepet / odeme sureci");
+    if (/iletisim|contact/.test(hay)) hints.push("Iletisim sayfasi");
+    if (/hakkinda|about|kurumsal/.test(hay)) hints.push("Hakkinda / bilgi sayfasi");
+    if (/blog|haber|news|makale|article/.test(hay)) hints.push("Icerik / blog sayfasi");
+    if (hasFile) hints.push("Dosya yukleme islemi iceriyor");
+    if (page.url.replace(/^https?:\/\/[^\/]+\/?/, "") === "") hints.push("Ana sayfa");
+    if (page.forms.length > 0 && hints.length === 0) hints.push("Form/veri girisi iceren islem sayfasi");
+    if (hints.length === 0) hints.push("Bilgilendirme / icerik sayfasi");
+    return hints.join("; ");
+}
+
 // ---- Tek bir sayfayi analiz et ----
 function analyzePage(url, timeoutSec) {
     var page = {
@@ -259,6 +333,7 @@ function analyzePage(url, timeoutSec) {
         title: "", metaDesc: "", lang: "",
         headings: { h1:0,h2:0,h3:0,h4:0,h5:0,h6:0 }, h1List: [],
         links: [], internalLinks: [], externalLinks: [],
+        navLinks: [], buttons: [], purpose: "",
         forms: [], scripts: 0, externalScripts: 0, styles: 0, images: 0, iframes: 0,
         tech: [], headers: ""
     };
@@ -308,18 +383,47 @@ function analyzePage(url, timeoutSec) {
             } catch (e) {}
         }
 
-        // links
+        // links + link metni (ne ise yaradigi)
         try {
             var as = doc.getElementsByTagName("a");
             var seen = {};
             for (var ai = 0; ai < as.length; ai++) {
                 var href = as[ai].getAttribute("href");
                 var abs = absoluteUrl(url, href);
-                if (!abs || seen[abs]) continue;
-                seen[abs] = true;
-                page.links.push(abs);
-                if (getDomain(abs) === domain) page.internalLinks.push(abs);
-                else page.externalLinks.push(abs);
+                var ltext = trim(as[ai].innerText || as[ai].textContent || "");
+                if (!ltext) ltext = trim(as[ai].getAttribute("title") || as[ai].getAttribute("aria-label") || "");
+                if (!abs) continue;
+                if (!seen[abs]) {
+                    seen[abs] = true;
+                    page.links.push(abs);
+                    if (getDomain(abs) === domain) page.internalLinks.push(abs);
+                    else page.externalLinks.push(abs);
+                }
+                // anlamli metni olan baglantilar = gezinme adimlari
+                if (ltext && ltext.length <= 60 && page.navLinks.length < 60) {
+                    page.navLinks.push({ text: ltext, url: abs, internal: (getDomain(abs) === domain), purpose: guessActionPurpose(ltext, abs) });
+                }
+            }
+        } catch (e) {}
+
+        // butonlar ve tiklanabilir ogeler (ne yaptiklari)
+        try {
+            collectButtons(doc.getElementsByTagName("button"), page, url, "button");
+            var inps = doc.getElementsByTagName("input");
+            for (var bi = 0; bi < inps.length; bi++) {
+                var it = (inps[bi].getAttribute("type") || "text").toLowerCase();
+                if (it === "submit" || it === "button" || it === "reset" || it === "image") {
+                    var lbl = inps[bi].getAttribute("value") || inps[bi].getAttribute("alt") || (it === "submit" ? "Gonder" : it);
+                    addButton(page, lbl, it, "input[type=" + it + "]");
+                }
+            }
+            // role=button olan ogeler
+            var allEls = doc.getElementsByTagName("*");
+            for (var ri = 0; ri < allEls.length && page.buttons.length < 60; ri++) {
+                if ((allEls[ri].getAttribute && allEls[ri].getAttribute("role")) === "button") {
+                    var rt = trim(allEls[ri].innerText || allEls[ri].textContent || allEls[ri].getAttribute("aria-label") || "");
+                    if (rt) addButton(page, rt, "role=button", allEls[ri].tagName.toLowerCase());
+                }
             }
         } catch (e) {}
 
@@ -365,6 +469,7 @@ function analyzePage(url, timeoutSec) {
         try { page.images = doc.getElementsByTagName("img").length; } catch (e) {}
         try { page.iframes = doc.getElementsByTagName("iframe").length; } catch (e) {}
     }
+    page.purpose = guessPagePurpose(page);
     return page;
 }
 
@@ -435,18 +540,19 @@ function buildReport(target, pages, opts) {
     h.push("</table>");
 
     // toplam ozet
-    var totForms = 0, totLinks = 0, totExt = 0, totTime = 0;
+    var totForms = 0, totLinks = 0, totExt = 0, totTime = 0, totBtn = 0;
     for (var i = 0; i < pages.length; i++) {
         totForms += pages[i].forms.length;
         totLinks += pages[i].links.length;
         totExt += pages[i].externalLinks.length;
         totTime += pages[i].timeMs;
+        totBtn += pages[i].buttons.length;
     }
     h.push("<h2>Genel Ozet</h2>");
     h.push("<table class='summary-grid'><tr>");
     h.push("<td><div class='num'>" + pages.length + "</div>Sayfa</td>");
     h.push("<td><div class='num'>" + totForms + "</div>Form / Surec</td>");
-    h.push("<td><div class='num'>" + totLinks + "</div>Toplam Baglanti</td>");
+    h.push("<td><div class='num'>" + totBtn + "</div>Buton</td>");
     h.push("<td><div class='num'>" + (pages.length ? Math.round(totTime/pages.length) : 0) + " ms</div>Ort. Yanit</td>");
     h.push("</tr></table>");
 
@@ -456,6 +562,7 @@ function buildReport(target, pages, opts) {
         h.push("<h2>Sayfa " + (pi+1) + ": " + esc(p.url) + "</h2>");
 
         h.push("<table>");
+        h.push("<tr><th>Sayfanin amaci</th><td><b>" + esc(p.purpose || "-") + "</b></td></tr>");
         h.push("<tr><th>Durum</th><td class='" + statusClass(p) + "'>" + p.status + " " + esc(p.statusText) + (p.error ? " &mdash; " + esc(p.error) : "") + "</td></tr>");
         h.push("<tr><th>Yanit suresi</th><td>" + p.timeMs + " ms</td></tr>");
         h.push("<tr><th>Boyut</th><td>" + Math.round(p.sizeBytes/1024) + " KB (" + p.sizeBytes + " byte)</td></tr>");
@@ -505,6 +612,32 @@ function buildReport(target, pages, opts) {
             }
         }
 
+        // BUTONLAR = ne yaptiklari
+        h.push("<h2 style='font-size:13px;border-bottom:1px dashed #ccc;'>Butonlar / tiklanabilir ogeler (ne yapar)</h2>");
+        if (p.buttons.length === 0) {
+            h.push("<span class='muted'>Etiketli buton tespit edilmedi.</span>");
+        } else {
+            h.push("<table><tr><th>Buton / oge</th><th>Tur</th><th>Ne yapar (tahmin)</th></tr>");
+            for (var bi = 0; bi < p.buttons.length; bi++) {
+                var bt = p.buttons[bi];
+                h.push("<tr><td>" + esc(bt.label) + "</td><td>" + esc(bt.type) + "</td><td>" + esc(bt.purpose) + "</td></tr>");
+            }
+            h.push("</table>");
+        }
+
+        // GEZINME ADIMLARI = baglantilarin ne ise yaradigi
+        h.push("<h2 style='font-size:13px;border-bottom:1px dashed #ccc;'>Gezinme adimlari (baglantilar ne ise yarar)</h2>");
+        if (p.navLinks.length === 0) {
+            h.push("<span class='muted'>Etiketli gezinme baglantisi yok.</span>");
+        } else {
+            h.push("<table><tr><th>Baglanti metni</th><th>Ne ise yarar (tahmin)</th><th>Yon</th><th>Hedef</th></tr>");
+            for (var ni = 0; ni < p.navLinks.length; ni++) {
+                var nv = p.navLinks[ni];
+                h.push("<tr><td>" + esc(nv.text) + "</td><td>" + esc(nv.purpose) + "</td><td>" + (nv.internal ? "ic" : "<span class='warn'>dis</span>") + "</td><td class='muted'>" + esc(nv.url) + "</td></tr>");
+            }
+            h.push("</table>");
+        }
+
         // dis baglanti ornekleri
         if (p.externalLinks.length) {
             h.push("<details><summary style='cursor:pointer;margin-top:8px;'><b>Dis baglantilar (" + p.externalLinks.length + ")</b></summary>");
@@ -521,10 +654,10 @@ function buildReport(target, pages, opts) {
     // SURE​C AKISI (crawl modunda)
     if (opts.crawl && pages.length > 1) {
         h.push("<h2>Surec Akis Haritasi</h2>");
-        h.push("<table><tr><th>#</th><th>Sayfa</th><th>Surec sayisi</th><th>Ic baglanti</th><th>Durum</th></tr>");
+        h.push("<table><tr><th>#</th><th>Sayfa</th><th>Amaci</th><th>Form</th><th>Buton</th><th>Durum</th></tr>");
         for (var mi = 0; mi < pages.length; mi++) {
             var mp = pages[mi];
-            h.push("<tr><td>" + (mi+1) + "</td><td>" + esc(mp.url) + "</td><td>" + mp.forms.length + "</td><td>" + mp.internalLinks.length + "</td><td class='" + statusClass(mp) + "'>" + mp.status + "</td></tr>");
+            h.push("<tr><td>" + (mi+1) + "</td><td class='muted'>" + esc(mp.url) + "</td><td>" + esc(mp.purpose) + "</td><td>" + mp.forms.length + "</td><td>" + mp.buttons.length + "</td><td class='" + statusClass(mp) + "'>" + mp.status + "</td></tr>");
         }
         h.push("</table>");
     }
