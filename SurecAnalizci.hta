@@ -359,6 +359,7 @@ function collectButtons(coll, page, url, src) {
 // ---- Bir buton/baglantinin ne yaptigini tahmin et ----
 function guessActionPurpose(text, url) {
     var t = (text + " " + (url || "")).toLowerCase();
+    if (/sifremi unut|sifre sifirla|forgot.*pass|reset.*pass|parolami unut/.test(t)) return "Sifre sifirlama";
     if (/giris|login|sign in|oturum a/.test(t)) return "Oturum acma (giris)";
     if (/cikis|logout|sign out|oturumu kapat/.test(t)) return "Oturumu kapatma";
     if (/kayit|register|sign up|uye ol|kaydol/.test(t)) return "Yeni kayit / uyelik";
@@ -545,7 +546,8 @@ function buildFormRequest(form, variant) {
         var fld = form.fields[i];
         if (fld.name === "(adsiz)" || !fld.name) continue;
         var v;
-        if (variant === "empty-required") v = fld.required ? "" : generateTestValue(fld, "valid");
+        if (fld.type === "hidden") v = fld.value || "";       // CSRF/token gibi gizli alanlari KORU
+        else if (variant === "empty-required") v = fld.required ? "" : generateTestValue(fld, "valid");
         else v = generateTestValue(fld, variant);
         pairs.push(encodeURIComponent(fld.name) + "=" + encodeURIComponent(v));
     }
