@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>Web Surec Analizci - Test Araci</title>
+<HTA:APPLICATION
+    ID="SurecAnalizci"
+    APPLICATIONNAME="WebSurecAnalizci"
+    BORDER="thin"
+    CAPTION="yes"
+    ICON=""
+    MAXIMIZEBUTTON="yes"
+    MINIMIZEBUTTON="yes"
+    SHOWINTASKBAR="yes"
+    SINGLEINSTANCE="yes"
+    SYSMENU="yes"
+    SCROLL="yes"
+    VERSION="1.0"
+    WINDOWSTATE="normal"
+/>
+<style type="text/css">
+    body {
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        background: #f4f6f9;
+        color: #222;
+        margin: 0;
+        padding: 0;
+        font-size: 13px;
+    }
+    .header {
+        background: #1f2d3d;
+        color: #fff;
+        padding: 14px 20px;
+    }
+    .header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    .header p { margin: 4px 0 0; font-size: 12px; color: #aab4c0; }
+    .panel {
+        background: #fff;
+        margin: 14px 20px;
+        padding: 16px;
+        border: 1px solid #dce1e7;
+        border-radius: 6px;
+    }
+    .row { margin-bottom: 10px; }
+    label { display: inline-block; width: 130px; vertical-align: middle; font-weight: 600; }
+    input[type=text] {
+        width: 60%;
+        padding: 6px 8px;
+        border: 1px solid #b5bcc4;
+        border-radius: 4px;
+        font-size: 13px;
+    }
+    input[type=number] { width: 70px; padding: 5px; border: 1px solid #b5bcc4; border-radius: 4px; }
+    button {
+        background: #2d7ff9;
+        color: #fff;
+        border: none;
+        padding: 8px 18px;
+        font-size: 13px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-weight: 600;
+    }
+    button:hover { background: #1c6ae0; }
+    button.secondary { background: #6c7a89; }
+    button.secondary:hover { background: #58646f; }
+    button:disabled { background: #b5bcc4; cursor: default; }
+    #status {
+        margin: 0 20px;
+        padding: 8px 14px;
+        font-size: 12px;
+        color: #555;
+        min-height: 16px;
+    }
+    .report h2 {
+        font-size: 15px;
+        border-bottom: 2px solid #2d7ff9;
+        padding-bottom: 4px;
+        margin-top: 22px;
+        color: #1f2d3d;
+    }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 12px; }
+    th, td { border: 1px solid #dce1e7; padding: 6px 9px; text-align: left; vertical-align: top; }
+    th { background: #eef2f6; font-weight: 600; }
+    .tag { display: inline-block; background: #eef2f6; border: 1px solid #cdd6df; border-radius: 3px; padding: 1px 7px; margin: 2px; font-size: 11px; }
+    .ok { color: #1a8a4a; font-weight: 600; }
+    .warn { color: #c47f00; font-weight: 600; }
+    .err { color: #c0392b; font-weight: 600; }
+    .muted { color: #888; }
+    .summary-grid td { width: 25%; }
+    .summary-grid .num { font-size: 20px; font-weight: 700; color: #2d7ff9; }
+    pre { background: #f7f9fb; border: 1px solid #e1e7ee; padding: 8px; overflow: auto; max-height: 220px; font-size: 11px; }
+    .step { background: #f7f9fb; border-left: 3px solid #2d7ff9; padding: 8px 12px; margin: 6px 0; }
+    .step b { color: #1f2d3d; }
+</style>
+</head>
+
+<body>
+<div class="header">
+    <h1>Web Surec Analizci</h1>
+    <p>Girilen adrese baglanir, sayfanin tum sureclerini analiz eder ve surec dokumani (rapor) cikarir. Tamamen test/analiz amaclidir.</p>
+</div>
+
+<div class="panel">
+    <div class="row">
+        <label>Hedef URL:</label>
+        <input type="text" id="urlInput" value="https://" />
+    </div>
+    <div class="row">
+        <label>Link tarama:</label>
+        <input type="checkbox" id="crawlChk" /> Ic baglantilari tara (1 seviye)
+        &nbsp;&nbsp; Maks. sayfa: <input type="number" id="maxPages" value="5" min="1" max="30" />
+    </div>
+    <div class="row">
+        <label>Zaman asimi (sn):</label>
+        <input type="number" id="timeoutSec" value="20" min="5" max="120" />
+    </div>
+    <div class="row" style="margin-top:14px;">
+        <button id="analyzeBtn" onclick="startAnalysis()">Analizi Baslat</button>
+        <button class="secondary" id="saveBtn" onclick="saveReport()" disabled>Raporu Kaydet (HTML)</button>
+        <button class="secondary" onclick="clearReport()">Temizle</button>
+    </div>
+</div>
+
+<div id="status">Hazir. Bir URL girip "Analizi Baslat" deyin.</div>
+
+<div class="panel report" id="report" style="display:none;"></div>
+
+<script language="JScript">
+
+// ============================================================
+//  Web Surec Analizci - HTA Test Araci
+//  Sadece analiz/raporlama yapar; hedef sistemde degisiklik
+//  yapmaz (yalnizca GET istekleri ve DOM ayristirma).
+// ============================================================
+
+var lastReportHtml = "";
+
+function $(id) { return document.getElementById(id); }
+
+function setStatus(msg, cls) {
+    var s = $("status");
+    s.innerHTML = msg;
+    s.className = cls || "";
+}
+
+function esc(t) {
+    if (t === null || typeof t === "undefined") return "";
+    return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function nowMs() { return (new Date()).getTime(); }
+
+// ---- HTTP istegi (ServerXMLHTTP, tam header + cross-domain) ----
+function httpGet(url, timeoutSec) {
+    var result = { ok: false, status: 0, statusText: "", headers: "", body: "", finalUrl: url, timeMs: 0, error: "" };
+    var xhr;
+    try {
+        xhr = new ActiveXObject("Msxml2.ServerXMLHTTP.6.0");
+    } catch (e1) {
+        try { xhr = new ActiveXObject("MSXML2.ServerXMLHTTP"); }
+        catch (e2) {
+            try { xhr = new ActiveXObject("Microsoft.XMLHTTP"); }
+            catch (e3) { result.error = "XMLHTTP nesnesi olusturulamadi."; return result; }
+        }
+    }
+    var start = nowMs();
+    try {
+        try { xhr.setTimeouts(timeoutSec*1000, timeoutSec*1000, timeoutSec*1000, timeoutSec*1000); } catch (eT) {}
+        xhr.open("GET", url, false);
+        try { xhr.setRequestHeader("User-Agent", "SurecAnalizci-HTA/1.0 (Test)"); } catch (eH) {}
+        xhr.send();
+        result.timeMs = nowMs() - start;
+        result.status = xhr.status;
+        result.statusText = xhr.statusText;
+        try { result.headers = xhr.getAllResponseHeaders(); } catch (eHh) {}
+        result.body = xhr.responseText || "";
+        try { result.finalUrl = xhr.getResponseHeader("Content-Location") || url; } catch (eFu) {}
+        result.ok = (xhr.status >= 200 && xhr.status < 400) || xhr.status === 0;
+    } catch (eS) {
+        result.timeMs = nowMs() - start;
+        result.error = (eS && eS.message) ? eS.message : "Baglanti hatasi";
+    }
+    return result;
+}
+
+// ---- HTML'i guvenli sekilde ayristir (htmlfile ActiveX) ----
+function parseHtml(html) {
+    var doc;
+    try {
+        doc = new ActiveXObject("htmlfile");
+        doc.open();
+        doc.write(html);
+        doc.close();
+    } catch (e) {
+        doc = null;
+    }
+    return doc;
+}
+
+function getHeaderValue(headers, name) {
+    var re = new RegExp("^" + name + "\\s*:\\s*(.+)$", "im");
+    var m = re.exec(headers || "");
+    return m ? trim(m[1]) : "";
+}
+
+function trim(s) { return String(s).replace(/^\s+|\s+$/g, ""); }
+
+// ---- URL yardimcilari ----
+function getDomain(url) {
+    var m = /^https?:\/\/([^\/\?#]+)/i.exec(url);
+    return m ? m[1].toLowerCase() : "";
+}
+function absoluteUrl(base, href) {
+    if (!href) return "";
+    href = trim(href);
+    if (/^(javascript:|mailto:|tel:|#|data:)/i.test(href)) return "";
+    if (/^https?:\/\//i.test(href)) return href;
+    var m = /^(https?:\/\/[^\/]+)(\/[^\?#]*)?/i.exec(base);
+    if (!m) return "";
+    var origin = m[1];
+    var path = m[2] || "/";
+    if (href.indexOf("//") === 0) return "http:" + href;
+    if (href.charAt(0) === "/") return origin + href;
+    var dir = path.replace(/\/[^\/]*$/, "/");
+    return origin + dir + href;
+}
+
+// ---- Teknoloji tespiti ----
+function detectTech(headers, body) {
+    var tech = [];
+    function add(t) { for (var i=0;i<tech.length;i++){ if(tech[i]===t) return; } tech.push(t); }
+    var server = getHeaderValue(headers, "Server");
+    if (server) add("Server: " + server);
+    var xpb = getHeaderValue(headers, "X-Powered-By");
+    if (xpb) add("X-Powered-By: " + xpb);
+    var b = body.toLowerCase();
+    if (/wp-content|wp-includes/.test(b)) add("WordPress");
+    if (/drupal/.test(b)) add("Drupal");
+    if (/joomla/.test(b)) add("Joomla");
+    if (/react|__react|reactdom/.test(b)) add("React");
+    if (/ng-version|angular/.test(b)) add("Angular");
+    if (/vue(\.|__|js)/.test(b)) add("Vue.js");
+    if (/jquery/.test(b)) add("jQuery");
+    if (/bootstrap/.test(b)) add("Bootstrap");
+    if (/gtag\(|google-analytics|googletagmanager/.test(b)) add("Google Analytics/Tag");
+    if (/cloudflare/.test((headers||"").toLowerCase())) add("Cloudflare");
+    if (/x-shopify|shopify/.test(b)) add("Shopify");
+    if (/laravel_session|laravel/.test((headers||"").toLowerCase())) add("Laravel");
+    if (/asp\.net|__viewstate/i.test(body)) add("ASP.NET");
+    return tech;
+}
+
+// ---- Tek bir sayfayi analiz et ----
+function analyzePage(url, timeoutSec) {
+    var page = {
+        url: url, ok: false, status: 0, statusText: "", error: "",
+        timeMs: 0, sizeBytes: 0, contentType: "", server: "",
+        title: "", metaDesc: "", lang: "",
+        headings: { h1:0,h2:0,h3:0,h4:0,h5:0,h6:0 }, h1List: [],
+        links: [], internalLinks: [], externalLinks: [],
+        forms: [], scripts: 0, externalScripts: 0, styles: 0, images: 0, iframes: 0,
+        tech: [], headers: ""
+    };
+    var res = httpGet(url, timeoutSec);
+    page.timeMs = res.timeMs;
+    page.status = res.status;
+    page.statusText = res.statusText;
+    page.headers = res.headers;
+    page.error = res.error;
+    page.contentType = getHeaderValue(res.headers, "Content-Type");
+    page.server = getHeaderValue(res.headers, "Server");
+    page.sizeBytes = res.body ? res.body.length : 0;
+    page.ok = res.ok && !res.error;
+    if (!res.body) return page;
+
+    page.tech = detectTech(res.headers, res.body);
+
+    var doc = parseHtml(res.body);
+    var domain = getDomain(url);
+
+    if (doc) {
+        try { page.title = trim(doc.title || ""); } catch (e) {}
+        // meta description + lang
+        try {
+            var metas = doc.getElementsByTagName("meta");
+            for (var mi = 0; mi < metas.length; mi++) {
+                var nm = (metas[mi].name || "").toLowerCase();
+                if (nm === "description") page.metaDesc = metas[mi].content || "";
+            }
+        } catch (e) {}
+        try {
+            var htmlEl = doc.getElementsByTagName("html");
+            if (htmlEl.length) page.lang = htmlEl[0].getAttribute("lang") || "";
+        } catch (e) {}
+
+        // headings
+        for (var hl = 1; hl <= 6; hl++) {
+            try {
+                var hs = doc.getElementsByTagName("h" + hl);
+                page.headings["h"+hl] = hs.length;
+                if (hl === 1) {
+                    for (var hi = 0; hi < hs.length && hi < 10; hi++) {
+                        var ht = trim(hs[hi].innerText || hs[hi].textContent || "");
+                        if (ht) page.h1List.push(ht);
+                    }
+                }
+            } catch (e) {}
+        }
+
+        // links
+        try {
+            var as = doc.getElementsByTagName("a");
+            var seen = {};
+            for (var ai = 0; ai < as.length; ai++) {
+                var href = as[ai].getAttribute("href");
+                var abs = absoluteUrl(url, href);
+                if (!abs || seen[abs]) continue;
+                seen[abs] = true;
+                page.links.push(abs);
+                if (getDomain(abs) === domain) page.internalLinks.push(abs);
+                else page.externalLinks.push(abs);
+            }
+        } catch (e) {}
+
+        // forms = surecler
+        try {
+            var fs = doc.getElementsByTagName("form");
+            for (var fi = 0; fi < fs.length; fi++) {
+                var f = fs[fi];
+                var form = {
+                    method: (f.getAttribute("method") || "GET").toUpperCase(),
+                    action: absoluteUrl(url, f.getAttribute("action") || url),
+                    name: f.getAttribute("name") || f.getAttribute("id") || ("Form #" + (fi+1)),
+                    fields: []
+                };
+                var ins = f.getElementsByTagName("input");
+                for (var ii = 0; ii < ins.length; ii++) {
+                    form.fields.push({
+                        tag: "input",
+                        type: ins[ii].getAttribute("type") || "text",
+                        name: ins[ii].getAttribute("name") || ins[ii].getAttribute("id") || "(adsiz)",
+                        required: ins[ii].getAttribute("required") !== null
+                    });
+                }
+                var sels = f.getElementsByTagName("select");
+                for (var si = 0; si < sels.length; si++) {
+                    form.fields.push({ tag:"select", type:"select", name: sels[si].getAttribute("name") || "(adsiz)", required:false });
+                }
+                var tas = f.getElementsByTagName("textarea");
+                for (var ti = 0; ti < tas.length; ti++) {
+                    form.fields.push({ tag:"textarea", type:"textarea", name: tas[ti].getAttribute("name") || "(adsiz)", required:false });
+                }
+                page.forms.push(form);
+            }
+        } catch (e) {}
+
+        // resources
+        try {
+            var scr = doc.getElementsByTagName("script");
+            page.scripts = scr.length;
+            for (var ssi = 0; ssi < scr.length; ssi++) { if (scr[ssi].getAttribute("src")) page.externalScripts++; }
+        } catch (e) {}
+        try { page.styles = doc.getElementsByTagName("link").length; } catch (e) {}
+        try { page.images = doc.getElementsByTagName("img").length; } catch (e) {}
+        try { page.iframes = doc.getElementsByTagName("iframe").length; } catch (e) {}
+    }
+    return page;
+}
+
+// ---- Ana akis ----
+function startAnalysis() {
+    var url = trim($("urlInput").value);
+    if (!/^https?:\/\/.+/i.test(url)) {
+        setStatus("Lutfen gecerli bir URL girin (http:// veya https:// ile baslamali).", "err");
+        return;
+    }
+    var timeoutSec = parseInt($("timeoutSec").value, 10) || 20;
+    var crawl = $("crawlChk").checked;
+    var maxPages = parseInt($("maxPages").value, 10) || 5;
+
+    $("analyzeBtn").disabled = true;
+    $("saveBtn").disabled = true;
+    setStatus("Analiz ediliyor: " + esc(url) + " ...", "");
+
+    var pages = [];
+    var queue = [url];
+    var visited = {};
+    var limit = crawl ? maxPages : 1;
+
+    while (queue.length > 0 && pages.length < limit) {
+        var cur = queue.shift();
+        if (visited[cur]) continue;
+        visited[cur] = true;
+        setStatus("Analiz ediliyor (" + (pages.length+1) + "/" + limit + "): " + esc(cur), "");
+        var p = analyzePage(cur, timeoutSec);
+        pages.push(p);
+        if (crawl && pages.length < limit) {
+            for (var i = 0; i < p.internalLinks.length && queue.length < limit*3; i++) {
+                var nl = p.internalLinks[i].replace(/#.*$/, "");
+                if (!visited[nl]) queue.push(nl);
+            }
+        }
+    }
+
+    lastReportHtml = buildReport(url, pages, { crawl: crawl, timeoutSec: timeoutSec });
+    $("report").style.display = "block";
+    $("report").innerHTML = lastReportHtml;
+    $("analyzeBtn").disabled = false;
+    $("saveBtn").disabled = false;
+
+    var first = pages[0];
+    if (first && first.ok) setStatus("Analiz tamamlandi. " + pages.length + " sayfa incelendi. Raporu kaydedebilirsiniz.", "ok");
+    else if (first) setStatus("Analiz bitti ancak hedef yanit vermedi (durum: " + first.status + (first.error ? ", " + esc(first.error) : "") + ").", "warn");
+    else setStatus("Analiz basarisiz.", "err");
+}
+
+// ---- Rapor olusturma ----
+function statusClass(p) {
+    if (p.error) return "err";
+    if (p.status >= 200 && p.status < 300) return "ok";
+    if (p.status >= 300 && p.status < 400) return "warn";
+    return "err";
+}
+
+function buildReport(target, pages, opts) {
+    var h = [];
+    var now = new Date();
+    h.push("<h2>Surec Analiz Raporu</h2>");
+    h.push("<table>");
+    h.push("<tr><th>Hedef</th><td>" + esc(target) + "</td></tr>");
+    h.push("<tr><th>Tarih</th><td>" + esc(now.toLocaleString()) + "</td></tr>");
+    h.push("<tr><th>Incelenen sayfa</th><td>" + pages.length + (opts.crawl ? " (tarama acik)" : "") + "</td></tr>");
+    h.push("<tr><th>Zaman asimi</th><td>" + opts.timeoutSec + " sn</td></tr>");
+    h.push("</table>");
+
+    // toplam ozet
+    var totForms = 0, totLinks = 0, totExt = 0, totTime = 0;
+    for (var i = 0; i < pages.length; i++) {
+        totForms += pages[i].forms.length;
+        totLinks += pages[i].links.length;
+        totExt += pages[i].externalLinks.length;
+        totTime += pages[i].timeMs;
+    }
+    h.push("<h2>Genel Ozet</h2>");
+    h.push("<table class='summary-grid'><tr>");
+    h.push("<td><div class='num'>" + pages.length + "</div>Sayfa</td>");
+    h.push("<td><div class='num'>" + totForms + "</div>Form / Surec</td>");
+    h.push("<td><div class='num'>" + totLinks + "</div>Toplam Baglanti</td>");
+    h.push("<td><div class='num'>" + (pages.length ? Math.round(totTime/pages.length) : 0) + " ms</div>Ort. Yanit</td>");
+    h.push("</tr></table>");
+
+    // her sayfa
+    for (var pi = 0; pi < pages.length; pi++) {
+        var p = pages[pi];
+        h.push("<h2>Sayfa " + (pi+1) + ": " + esc(p.url) + "</h2>");
+
+        h.push("<table>");
+        h.push("<tr><th>Durum</th><td class='" + statusClass(p) + "'>" + p.status + " " + esc(p.statusText) + (p.error ? " &mdash; " + esc(p.error) : "") + "</td></tr>");
+        h.push("<tr><th>Yanit suresi</th><td>" + p.timeMs + " ms</td></tr>");
+        h.push("<tr><th>Boyut</th><td>" + Math.round(p.sizeBytes/1024) + " KB (" + p.sizeBytes + " byte)</td></tr>");
+        h.push("<tr><th>Content-Type</th><td>" + esc(p.contentType) + "</td></tr>");
+        h.push("<tr><th>Sunucu</th><td>" + esc(p.server || "-") + "</td></tr>");
+        h.push("<tr><th>Sayfa basligi</th><td>" + esc(p.title || "-") + "</td></tr>");
+        h.push("<tr><th>Dil</th><td>" + esc(p.lang || "-") + "</td></tr>");
+        h.push("<tr><th>Aciklama (meta)</th><td>" + esc(p.metaDesc || "-") + "</td></tr>");
+        h.push("</table>");
+
+        // teknolojiler
+        h.push("<b>Tespit edilen teknolojiler:</b><br>");
+        if (p.tech.length) {
+            for (var ti = 0; ti < p.tech.length; ti++) h.push("<span class='tag'>" + esc(p.tech[ti]) + "</span>");
+        } else h.push("<span class='muted'>Belirgin teknoloji tespit edilemedi.</span>");
+        h.push("<br>");
+
+        // sayfa yapisi
+        h.push("<b>Sayfa yapisi (basliklar):</b> ");
+        h.push("H1:" + p.headings.h1 + " H2:" + p.headings.h2 + " H3:" + p.headings.h3 + " H4:" + p.headings.h4 + " H5:" + p.headings.h5 + " H6:" + p.headings.h6 + "<br>");
+        if (p.h1List.length) {
+            h.push("<span class='muted'>Ana basliklar: " + esc(p.h1List.join(" | ")) + "</span><br>");
+        }
+
+        // kaynaklar
+        h.push("<b>Kaynaklar:</b> Script: " + p.scripts + " (harici: " + p.externalScripts + "), Stil/Link: " + p.styles + ", Gorsel: " + p.images + ", iFrame: " + p.iframes + "<br>");
+        h.push("<b>Baglantilar:</b> Toplam " + p.links.length + " (ic: " + p.internalLinks.length + ", dis: " + p.externalLinks.length + ")<br>");
+
+        // FORMLAR = SURECLER
+        h.push("<h2 style='font-size:13px;border-bottom:1px dashed #ccc;'>Tespit edilen surecler (formlar)</h2>");
+        if (p.forms.length === 0) {
+            h.push("<span class='muted'>Bu sayfada form/etkilesimli surec tespit edilmedi.</span>");
+        } else {
+            for (var fi = 0; fi < p.forms.length; fi++) {
+                var f = p.forms[fi];
+                h.push("<div class='step'>");
+                h.push("<b>Surec " + (fi+1) + ": " + esc(f.name) + "</b><br>");
+                h.push("Yontem: <b>" + esc(f.method) + "</b> &rarr; Hedef: " + esc(f.action) + "<br>");
+                h.push("Alanlar (" + f.fields.length + "): ");
+                if (f.fields.length) {
+                    for (var fj = 0; fj < f.fields.length; fj++) {
+                        var fld = f.fields[fj];
+                        h.push("<span class='tag'>" + esc(fld.name) + " [" + esc(fld.type) + "]" + (fld.required ? " *" : "") + "</span>");
+                    }
+                } else h.push("<span class='muted'>alan yok</span>");
+                h.push("</div>");
+            }
+        }
+
+        // dis baglanti ornekleri
+        if (p.externalLinks.length) {
+            h.push("<details><summary style='cursor:pointer;margin-top:8px;'><b>Dis baglantilar (" + p.externalLinks.length + ")</b></summary>");
+            h.push("<pre>");
+            for (var ei = 0; ei < p.externalLinks.length && ei < 50; ei++) h.push(esc(p.externalLinks[ei]) + "\n");
+            h.push("</pre></details>");
+        }
+        // HTTP basliklari
+        if (p.headers) {
+            h.push("<details><summary style='cursor:pointer;'><b>HTTP yanit basliklari</b></summary><pre>" + esc(p.headers) + "</pre></details>");
+        }
+    }
+
+    // SURE​C AKISI (crawl modunda)
+    if (opts.crawl && pages.length > 1) {
+        h.push("<h2>Surec Akis Haritasi</h2>");
+        h.push("<table><tr><th>#</th><th>Sayfa</th><th>Surec sayisi</th><th>Ic baglanti</th><th>Durum</th></tr>");
+        for (var mi = 0; mi < pages.length; mi++) {
+            var mp = pages[mi];
+            h.push("<tr><td>" + (mi+1) + "</td><td>" + esc(mp.url) + "</td><td>" + mp.forms.length + "</td><td>" + mp.internalLinks.length + "</td><td class='" + statusClass(mp) + "'>" + mp.status + "</td></tr>");
+        }
+        h.push("</table>");
+    }
+
+    h.push("<p class='muted' style='margin-top:18px;'>Bu rapor Web Surec Analizci (HTA) ile olusturulmustur. Yalnizca GET istekleri ve pasif DOM analizi yapilmistir; hedef sistemde herhangi bir degisiklik yapilmamistir.</p>");
+    return h.join("");
+}
+
+// ---- Raporu diske kaydet ----
+function saveReport() {
+    if (!lastReportHtml) { setStatus("Once analiz yapin.", "warn"); return; }
+    try {
+        var fso = new ActiveXObject("Scripting.FileSystemObject");
+        var stamp = (new Date()).getTime();
+        var fileName = "surec_raporu_" + stamp + ".html";
+        // calisma klasoru
+        var folder = "";
+        try {
+            var shell = new ActiveXObject("WScript.Shell");
+            folder = shell.CurrentDirectory;
+        } catch (e) {}
+        var fullPath = (folder ? folder + "\\" : "") + fileName;
+        var full = "<!DOCTYPE html><html><head><meta charset='utf-8'><title>Surec Raporu</title>" +
+            "<style>body{font-family:Segoe UI,Arial,sans-serif;font-size:13px;color:#222;margin:24px;}" +
+            "table{border-collapse:collapse;width:100%;margin-top:8px;font-size:12px;}" +
+            "th,td{border:1px solid #dce1e7;padding:6px 9px;text-align:left;vertical-align:top;}" +
+            "th{background:#eef2f6;}h2{color:#1f2d3d;border-bottom:2px solid #2d7ff9;padding-bottom:4px;}" +
+            ".tag{display:inline-block;background:#eef2f6;border:1px solid #cdd6df;border-radius:3px;padding:1px 7px;margin:2px;font-size:11px;}" +
+            ".ok{color:#1a8a4a;}.warn{color:#c47f00;}.err{color:#c0392b;}.muted{color:#888;}" +
+            ".step{background:#f7f9fb;border-left:3px solid #2d7ff9;padding:8px 12px;margin:6px 0;}" +
+            ".num{font-size:20px;font-weight:700;color:#2d7ff9;}pre{background:#f7f9fb;border:1px solid #e1e7ee;padding:8px;overflow:auto;}</style>" +
+            "</head><body>" + lastReportHtml + "</body></html>";
+        var file = fso.CreateTextFile(fullPath, true);
+        file.Write(full);
+        file.Close();
+        setStatus("Rapor kaydedildi: " + esc(fullPath), "ok");
+    } catch (e) {
+        setStatus("Rapor kaydedilemedi: " + esc(e.message), "err");
+    }
+}
+
+function clearReport() {
+    $("report").innerHTML = "";
+    $("report").style.display = "none";
+    lastReportHtml = "";
+    $("saveBtn").disabled = true;
+    setStatus("Temizlendi.", "");
+}
+
+// pencere boyutu
+window.resizeTo(900, 720);
+</script>
+</body>
+</html>
