@@ -124,6 +124,34 @@
         <input type="checkbox" id="liveSubmitChk" /> <span class="err">Formlari uretilen test verisiyle GERCEKTEN gonder</span>
         <span class="muted">(varsayilan: sadece onizleme. Yalnizca yetkili oldugunuz sitelerde acin!)</span>
     </div>
+
+    <div class="row" style="border-top:1px solid #e1e7ee; padding-top:10px; margin-top:10px;">
+        <label>Otomatik giris:</label>
+        <input type="checkbox" id="loginChk" onclick="toggleLogin()" />
+        <span class="err">Siteye otomatik giris yap ve oturumla gez</span>
+        <span class="muted">(yalnizca yetkili/kendi sitenizde!)</span>
+    </div>
+    <div id="loginFields" style="display:none;">
+        <div class="row">
+            <label>Giris sayfasi URL:</label>
+            <input type="text" id="loginUrl" placeholder="bos birakilirsa Hedef URL kullanilir" />
+        </div>
+        <div class="row">
+            <label>Kullanici/E-posta:</label>
+            <input type="text" id="loginUser" />
+            &nbsp; Alan adi (ops.): <input type="text" id="loginUserField" style="width:120px;" placeholder="otomatik" />
+        </div>
+        <div class="row">
+            <label>Sifre:</label>
+            <input type="password" id="loginPass" />
+            &nbsp; Alan adi (ops.): <input type="text" id="loginPassField" style="width:120px;" placeholder="otomatik" />
+        </div>
+        <div class="row">
+            <label></label>
+            <span class="muted">Giris sonrasi gezinme icin yukaridaki "Ic baglantilari tara" secenegini de acin.</span>
+        </div>
+    </div>
+
     <div class="row" style="margin-top:14px;">
         <button id="analyzeBtn" onclick="startAnalysis()">Analizi Baslat</button>
         <button class="secondary" id="saveBtn" onclick="saveReport()" disabled>Raporu Kaydet (HTML)</button>
@@ -148,6 +176,8 @@
 var lastReportHtml = "";
 
 function $(id) { return document.getElementById(id); }
+
+function toggleLogin() { $("loginFields").style.display = $("loginChk").checked ? "block" : "none"; }
 
 function setStatus(msg, cls) {
     var s = $("status");
@@ -199,7 +229,47 @@ function httpSend(method, url, body, contentType, timeoutSec) {
     }
     return result;
 }
-function httpGet(url, timeoutSec) { return httpSend("GET", url, null, null, timeoutSec); }
+
+// ---- Oturumlu istek (WinHttpRequest: cerez + yonlendirme otomatik) ----
+// Ayni nesne tekrar kullanildiginda cerezler oturum boyunca korunur;
+// boylece giris yapildiktan sonra gezilen sayfalar kimlik dogrulamali olur.
+function createSession() {
+    var s = { http: null, ok: false, loggedIn: false };
+    try { s.http = new ActiveXObject("WinHttp.WinHttpRequest.5.1"); s.ok = true; }
+    catch (e) { s.http = null; s.ok = false; }
+    return s;
+}
+function httpSendWin(session, method, url, body, contentType, timeoutSec) {
+    var result = { ok: false, status: 0, statusText: "", headers: "", body: "", finalUrl: url, timeMs: 0, error: "" };
+    var w = session.http;
+    var start = nowMs();
+    try {
+        try { w.SetTimeouts(timeoutSec*1000, timeoutSec*1000, timeoutSec*1000, timeoutSec*1000); } catch (eT) {}
+        w.Open(method, url, false);
+        try { w.SetRequestHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"); } catch (eH) {}
+        try { w.SetRequestHeader("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"); } catch (eA) {}
+        try { w.SetRequestHeader("Accept-Language", "tr-TR,tr;q=0.9,en;q=0.8"); } catch (eL) {}
+        if (contentType) { try { w.SetRequestHeader("Content-Type", contentType); } catch (eC) {} }
+        w.Send(body || "");
+        result.timeMs = nowMs() - start;
+        result.status = w.Status;
+        result.statusText = w.StatusText;
+        try { result.headers = w.GetAllResponseHeaders(); } catch (eHh) {}
+        result.body = w.ResponseText || "";
+        try { result.finalUrl = w.Option(1) || url; } catch (eFu) {} // Option(1)=WinHttpRequestOption_URL (son URL)
+        result.ok = (w.Status >= 200 && w.Status < 400);
+    } catch (eS) {
+        result.timeMs = nowMs() - start;
+        result.error = (eS && eS.message) ? eS.message : "Baglanti hatasi";
+    }
+    return result;
+}
+// Dagitici: oturum varsa WinHttp (kimlik dogrulamali), yoksa ServerXMLHTTP
+function request(method, url, body, contentType, timeoutSec, session) {
+    if (session && session.http) return httpSendWin(session, method, url, body, contentType, timeoutSec);
+    return httpSend(method, url, body, contentType, timeoutSec);
+}
+function httpGet(url, timeoutSec, session) { return request("GET", url, null, null, timeoutSec, session); }
 
 // ---- HTML'i guvenli sekilde ayristir (htmlfile ActiveX) ----
 function parseHtml(html) {
@@ -512,6 +582,94 @@ function evalResponse(variant, res) {
     return { verdict: "warn", note: "Yanit " + res.status + " " + res.statusText + "." };
 }
 
+// ==================================================================
+//  OTOMATIK GIRIS - giris formunu bul ve kimlik bilgileriyle gonder
+// ==================================================================
+function findLoginForm(doc, baseUrl) {
+    var forms = doc.getElementsByTagName("form");
+    for (var i = 0; i < forms.length; i++) {
+        var f = forms[i];
+        var ins = f.getElementsByTagName("input");
+        var passEl = null, userEl = null, hidden = [];
+        for (var j = 0; j < ins.length; j++) {
+            var t = (ins[j].getAttribute("type") || "text").toLowerCase();
+            var nm = ins[j].getAttribute("name") || ins[j].getAttribute("id") || "";
+            if (t === "password" && !passEl) passEl = ins[j];
+            else if (t === "hidden") hidden.push({ name: nm, value: ins[j].getAttribute("value") || "" });
+            else if ((t === "text" || t === "email" || t === "tel") && nm) {
+                // kullanici alani: ad/e-posta/login icerenleri oncele
+                if (!userEl || /user|email|eposta|login|kullanici|uye|account|tckn|tc/i.test(nm)) userEl = ins[j];
+            }
+        }
+        if (passEl) {
+            return {
+                action: absoluteUrl(baseUrl, f.getAttribute("action") || baseUrl),
+                method: (f.getAttribute("method") || "POST").toUpperCase(),
+                passName: passEl.getAttribute("name") || passEl.getAttribute("id") || "password",
+                userName: userEl ? (userEl.getAttribute("name") || userEl.getAttribute("id")) : "",
+                hidden: hidden
+            };
+        }
+    }
+    return null;
+}
+
+// Maskelenmis sifre gosterimi (raporda asla acik yazmaz)
+function maskPass(p) { return p ? "•••••• (" + p.length + " karakter)" : "(bos)"; }
+
+function autoLogin(session, loginUrl, userVal, passVal, userFieldOverride, passFieldOverride, timeoutSec) {
+    var out = { ok: false, note: "", status: 0, action: "", userField: "", passField: "", usedHidden: 0, sessionCookieSeen: false };
+    // 1) giris sayfasini al
+    var res = httpGet(loginUrl, timeoutSec, session);
+    out.status = res.status;
+    if (res.error) { out.note = "Giris sayfasi alinamadi: " + res.error; return out; }
+    var doc = parseHtml(res.body);
+    var lf = doc ? findLoginForm(doc, loginUrl) : null;
+
+    // alan adlarini belirle (override > otomatik > varsayilan)
+    var userField = userFieldOverride || (lf && lf.userName) || "username";
+    var passField = passFieldOverride || (lf && lf.passName) || "password";
+    var action = (lf && lf.action) ? lf.action : loginUrl;
+    var method = (lf && lf.method) ? lf.method : "POST";
+    out.action = action; out.userField = userField; out.passField = passField;
+
+    // 2) POST govdesini olustur: gizli alanlar (CSRF) + kullanici + sifre
+    var pairs = [];
+    if (lf && lf.hidden) {
+        for (var h = 0; h < lf.hidden.length; h++) {
+            if (lf.hidden[h].name) { pairs.push(encodeURIComponent(lf.hidden[h].name) + "=" + encodeURIComponent(lf.hidden[h].value)); out.usedHidden++; }
+        }
+    }
+    pairs.push(encodeURIComponent(userField) + "=" + encodeURIComponent(userVal));
+    pairs.push(encodeURIComponent(passField) + "=" + encodeURIComponent(passVal));
+    var bodyStr = pairs.join("&");
+
+    // 3) gonder (oturum cerezleri WinHttp tarafindan otomatik tutulur)
+    var loginRes;
+    if (method.indexOf("GET") === 0) {
+        loginRes = httpGet(action + (action.indexOf("?") >= 0 ? "&" : "?") + bodyStr, timeoutSec, session);
+    } else {
+        loginRes = request("POST", action, bodyStr, "application/x-www-form-urlencoded", timeoutSec, session);
+    }
+    out.status = loginRes.status;
+    if (loginRes.error) { out.note = "Giris istegi hatasi: " + loginRes.error; return out; }
+    out.sessionCookieSeen = /set-cookie/i.test(loginRes.headers || "");
+
+    // 4) basari sezgisi: panel sayfasini tekrar cek, sifre alani kaybolduysa / cikis linki varsa giris basarili
+    var verify = httpGet(loginUrl, timeoutSec, session);
+    var vbody = (verify.body || "").toLowerCase();
+    var stillHasPassword = /type\s*=\s*["']?password/i.test(verify.body || "");
+    var hasLogout = /(logout|cikis|çıkış|oturumu kapat|sign ?out|hesabim|hesabım|my account)/i.test(vbody);
+    if (hasLogout || (!stillHasPassword && out.sessionCookieSeen)) {
+        out.ok = true; out.note = "Giris basarili gorunuyor" + (hasLogout ? " (cikis/hesap baglantisi tespit edildi)." : " (sifre formu kayboldu, oturum cerezi alindi).");
+    } else if (out.sessionCookieSeen) {
+        out.ok = true; out.note = "Oturum cerezi alindi ancak dogrulama belirsiz; gezinme yine de oturumla yapilacak.";
+    } else {
+        out.ok = false; out.note = "Giris dogrulanamadi (oturum cerezi gorulmedi). Alan adlarini elle girmeyi deneyin.";
+    }
+    return out;
+}
+
 // ---- Giris alanlarini topla (etiket + amac ile) ----
 function addFields(doc, coll, tag, target, markForm) {
     for (var i = 0; i < coll.length; i++) {
@@ -585,7 +743,7 @@ function analyzePage(url, timeoutSec, opts) {
         forms: [], scripts: 0, externalScripts: 0, styles: 0, images: 0, iframes: 0,
         tech: [], headers: ""
     };
-    var res = httpGet(url, timeoutSec);
+    var res = httpGet(url, timeoutSec, opts.session);
     page.timeMs = res.timeMs;
     page.status = res.status;
     page.statusText = res.statusText;
@@ -730,8 +888,8 @@ function analyzePage(url, timeoutSec, opts) {
                     var req = buildFormRequest(frm, sv.variant);
                     if (!req.url) continue;
                     var res = req.isGet
-                        ? httpSend("GET", req.url, null, null, timeoutSec)
-                        : httpSend("POST", req.url, req.body, "application/x-www-form-urlencoded", timeoutSec);
+                        ? request("GET", req.url, null, null, timeoutSec, opts.session)
+                        : request("POST", req.url, req.body, "application/x-www-form-urlencoded", timeoutSec, opts.session);
                     frm.submissions.push({ scenario: sv.name, variant: sv.variant, method: req.method, url: req.url, eval: evalResponse(sv.variant, res), status: res.status });
                 }
             }
@@ -752,17 +910,33 @@ function startAnalysis() {
     var maxPages = parseInt($("maxPages").value, 10) || 5;
     var genData = $("genDataChk").checked;
     var liveSubmit = $("liveSubmitChk").checked;
+    var doLogin = $("loginChk").checked;
 
     if (liveSubmit) {
         var onay = confirm("DIKKAT: Canli gonderim acik.\n\nFormlar uretilen test verisiyle GERCEKTEN gonderilecek (GET ve POST). Bu, hedef sistemde kayit olusturma, mesaj gonderme gibi etkiler yaratabilir.\n\nYalnizca test etme YETKINIZ olan bir siteyse devam edin.\n\nDevam edilsin mi?");
         if (!onay) { setStatus("Canli gonderim iptal edildi. Onizleme modunda devam edebilirsiniz.", "warn"); return; }
     }
 
+    var session = null, loginResult = null;
+    if (doLogin) {
+        var userVal = $("loginUser").value;
+        var passVal = $("loginPass").value;
+        if (!userVal || !passVal) { setStatus("Otomatik giris icin kullanici adi ve sifre gerekli.", "err"); return; }
+        var onay2 = confirm("DIKKAT: Otomatik giris acik.\n\nGirdiginiz kimlik bilgileriyle siteye GERCEKTEN giris yapilacak ve oturum acikken sayfalar gezilecek.\n\nYalnizca giris yapma YETKINIZ olan (kendi/test) bir siteyse devam edin.\n\nDevam edilsin mi?");
+        if (!onay2) { setStatus("Otomatik giris iptal edildi.", "warn"); return; }
+        session = createSession();
+        if (!session.ok) { setStatus("Oturum olusturulamadi (WinHttpRequest yok). Otomatik giris bu makinede desteklenmiyor.", "err"); return; }
+        var loginUrl = trim($("loginUrl").value) || url;
+        setStatus("Otomatik giris yapiliyor: " + esc(loginUrl) + " ...", "");
+        loginResult = autoLogin(session, loginUrl, userVal, passVal, trim($("loginUserField").value), trim($("loginPassField").value), timeoutSec);
+        session.loggedIn = loginResult.ok;
+    }
+
     $("analyzeBtn").disabled = true;
     $("saveBtn").disabled = true;
     setStatus("Analiz ediliyor: " + esc(url) + " ...", "");
 
-    var opts = { genData: genData, liveSubmit: liveSubmit };
+    var opts = { genData: genData, liveSubmit: liveSubmit, session: session };
     var pages = [];
     var queue = [url];
     var visited = {};
@@ -783,7 +957,7 @@ function startAnalysis() {
         }
     }
 
-    lastReportHtml = buildReport(url, pages, { crawl: crawl, timeoutSec: timeoutSec, genData: genData, liveSubmit: liveSubmit });
+    lastReportHtml = buildReport(url, pages, { crawl: crawl, timeoutSec: timeoutSec, genData: genData, liveSubmit: liveSubmit, login: loginResult, passMask: doLogin ? maskPass($("loginPass").value) : "" });
     $("report").style.display = "block";
     $("report").innerHTML = lastReportHtml;
     $("analyzeBtn").disabled = false;
@@ -830,6 +1004,20 @@ function buildReport(target, pages, opts) {
     h.push("<td><div class='num'>" + totBtn + "</div>Buton</td>");
     h.push("<td><div class='num'>" + (pages.length ? Math.round(totTime/pages.length) : 0) + " ms</div>Ort. Yanit</td>");
     h.push("</tr></table>");
+
+    // OTOMATIK GIRIS sonucu
+    if (opts.login) {
+        var lg = opts.login;
+        h.push("<h2>Otomatik Giris</h2>");
+        h.push("<table>");
+        h.push("<tr><th>Sonuc</th><td class='" + (lg.ok ? "ok" : "err") + "'>" + (lg.ok ? "BASARILI" : "BASARISIZ") + " &mdash; " + esc(lg.note) + "</td></tr>");
+        h.push("<tr><th>Giris hedefi (action)</th><td class='muted'>" + esc(lg.action) + "</td></tr>");
+        h.push("<tr><th>Kullanilan alanlar</th><td>kullanici: <b>" + esc(lg.userField) + "</b>, sifre: <b>" + esc(lg.passField) + "</b>, gizli/CSRF alan: " + lg.usedHidden + "</td></tr>");
+        h.push("<tr><th>Sifre</th><td class='muted'>" + esc(opts.passMask) + " (raporda maskelenir)</td></tr>");
+        h.push("<tr><th>Oturum cerezi</th><td>" + (lg.sessionCookieSeen ? "<span class='ok'>alindi</span>" : "<span class='warn'>gorulmedi</span>") + "</td></tr>");
+        h.push("</table>");
+        h.push("<p class='muted'>Asagidaki sayfalar " + (lg.ok ? "kimlik dogrulamali oturumla" : "oturum denemesinden sonra") + " gezilmistir.</p>");
+    }
 
     // her sayfa
     for (var pi = 0; pi < pages.length; pi++) {

@@ -28,6 +28,18 @@ Varsayılan olarak açıktır. Her giriş alanının **formatına göre anlamlı
 
 Ayrıca "Gönderilecek istek (önizleme)" bölümünde formun **ne göndereceğini** (URL + gövde) gösterir ama **göndermez**.
 
+### Otomatik giriş + oturumla gezinme (opsiyonel — varsayılan KAPALI)
+
+"Otomatik giriş" seçeneği açılırsa araç:
+1. Giriş sayfasındaki **giriş formunu otomatik bulur** (şifre alanı olan form), gizli/**CSRF token** alanlarını korur
+2. Girdiğiniz kullanıcı adı/e-posta ve şifreyi yerleştirip formu gönderir (`WinHttp` ile çerez ve yönlendirmeler otomatik taşınır)
+3. Girişin başarılı olup olmadığını sezgisel doğrular (çıkış/hesap bağlantısı, şifre formunun kaybolması, oturum çerezi)
+4. **Aynı oturumla** iç bağlantıları gezip her kimlik-doğrulamalı sayfayı analiz eder ("İç bağlantıları tara" da açık olmalı)
+
+Kullanıcı/şifre alan adları otomatik tespit edilir; gerekirse elle de girebilirsiniz. Şifre ekranda ve raporda **maskelenir**, asla açık yazılmaz. Açmadan önce yetki onayı penceresi çıkar.
+
+> ⚠️ Otomatik giriş, kimlik bilgilerinizle gerçek erişim yapar. **Yalnızca giriş yapma yetkiniz olan (kendi/test) sitelerde** kullanın.
+
 ### Canlı gönderim (opsiyonel — varsayılan KAPALI)
 
 "Formları üretilen test verisiyle GERÇEKTEN gönder" seçeneği açılırsa, araç senaryoları gerçek GET/POST istekleriyle gönderir ve yanıtları değerlendirir (ör. XSS yükünün escape edilmeden yansıyıp yansımadığı, DB hata izi, boş zorunlu alanın yakalanıp yakalanmadığı). Açmadan önce bir onay penceresi çıkar.
